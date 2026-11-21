@@ -4,7 +4,7 @@
 ![python](https://img.shields.io/badge/python-3.10-blue)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-> **TL;DR** — A CPU-only, single-webcam assistive interface unifying a touchless **virtual mouse (HCI)** and **Indian Sign Language (ISL) recognition** with temporal sentence buffering and hybrid LLM translation. Built on macOS Apple Silicon (ARM64) with zero-copy shared-memory multiprocessing (**30 FPS**, up from 14 FPS - single-threaded), evaluated at **72.7% ± 4.1% accuracy (0.73 macro-F1)** via 5-fold cross-validation (**85.2%** on the shipped model's held-out split), and backed by **52 hardware-free unit tests - `pytest`**.
+> **TL;DR** — A CPU-only, single-webcam assistive interface unifying a touchless **virtual mouse (HCI)** and **Indian Sign Language (ISL) recognition** with temporal sentence buffering and hybrid LLM translation. Built on macOS Apple Silicon (ARM64) with zero-copy shared-memory multiprocessing (**30 FPS**, up from 14 FPS single-threaded), evaluated at **72.7% ± 4.1% accuracy (0.73 macro-F1)** via 5-fold cross-validation (**85.2%** on the shipped model's held-out split), and backed by **52 hardware-free `pytest` unit tests**.
 
 ## Demo Video
 
@@ -28,19 +28,19 @@
 | **Publication**          | Presented at **AdComSys 2026** (UEM Kolkata, June 26–27, 2026; Paper ID 307); to appear in Springer proceedings      |
 | **Core Stack**           | Python 3.10 · MediaPipe (Hands + Holistic) · TensorFlow Lite (Bi-LSTM, ~159K params) · OpenCV · PyAutoGUI · Eel      |
 | **Post-Paper Extension** | Temporal Intelligence Engine + Hybrid LLM (**Apple MLX** `Qwen1.5-1.8B-Chat-4bit` + **Groq** `llama-3.1-8b-instant`) |
-| **Throughput**           | **30 FPS** locked via zero-copy shared memory (up from 14 FPS GIL-blocked baseline)                                  |
+| **Throughput**           | **30 FPS** locked via zero-copy shared memory (up from 14 FPS GIL-blocked baseline; author-measured)                                  |
 | **Verification**         | 52 passing `pytest` unit tests · reproducible evaluation & 5-fold CV scripts                                         |
 
 ---
 
 ## Research Motivation & Challenges Overcome
 
-Most assistive gesture tools force an either-or tradeoff—offering - either OS cursor navigation or isolated sign recognition—and often rely on depth cameras, wearable gloves, GPUs, or voice wake words that exclude non-verbal users. This research project was engineered to overcome five core bottlenecks using only a standard 640×480 laptop webcam:
+Most assistive gesture tools force an either-or tradeoff—offering either OS cursor navigation or isolated sign recognition—and often rely on depth cameras, wearable gloves, GPUs, or voice wake words that exclude non-verbal users. This research project was engineered to overcome five core bottlenecks using only a standard 640×480 laptop webcam:
 
 1. **Functional Dichotomy (Unified Dual-Mode):** Combines deterministic virtual mouse control (Mode 1) and probabilistic ISL translation (Mode 2) inside one lightweight background application, with hands-free **Thumbs-Up (2.0 s)** wake and **Open-Palm (3.5 s)** mode switching.
 2. **Python GIL Concurrency Bottleneck:** Running MediaPipe tracking alongside Bi-LSTM inference in one loop dropped throughput to **14 FPS** and froze the cursor. Moving inference to isolated OS processes connected via `multiprocessing.shared_memory` eliminated ~27.6 MB/s of frame pickling and restored a locked **30 FPS**.
 3. **Studio-to-Webcam Domain Shift:** Models trained on straight-on studio clips (INCLUDE-50 at ~2 m) break on tilted, close-range laptop webcams (~0.5 m) due to scale and translation variance. **Shoulder-Invariant Normalization** maps all 201 landmarks relative to the user's chest center and shoulder width.
-4. **Softmax Hallucinations & UI Flickering:** Without a null state, softmax classifiers emit random signs whenever a user types or rests their hands. Injecting a 101-clip **`Idle`** negative-control class plus a temporal debouncing state machine stabilizes real-world output.
+4. **Softmax Hallucinations & UI Flickering:** Without a null state, softmax classifiers emit random signs whenever a user types or rests their hands. Adding a 101-clip **`Idle`** negative-control class plus a temporal debouncing state machine is designed to suppress this (clip-level Idle recall is ~66%, so the temporal gate matters).
 5. **Ergonomic Fatigue ("Gorilla Arm") & Micro-Tremor:** Absolute screen mapping causes rapid arm strain, while raw hand landmarks jitter. Relative knuckle-delta mapping (trackpad-style) paired with a velocity-adaptive **One Euro Filter** delivers smooth cursor control with minimal wrist movement.
 
 ---
@@ -76,7 +76,7 @@ Webcam (640×480 @ 30 FPS) ─► src/vision_backend.py (producer: capture, wake
 
 ### 1. Pipeline Throughput (14 FPS vs. 30 FPS)
 
-Offloading Bi-LSTM inference (~50–80 ms) to a GIL-isolated process keeps the Vision + HCI loop within **17–24 ms/frame** (well under the 33.3 ms budget for 30 FPS).
+Offloading Bi-LSTM inference (~50–80 ms) to a GIL-isolated process keeps the Vision + HCI loop within **17–24 ms/frame** (author-measured; the 30 FPS budget is 33.3 ms).
 
 <p align="center">
   <img src="https://q4rcgfyyqou1ialf.public.blob.vercel-storage.com/fps_benchmark.jpg" width="460" alt="Vision Pipeline Throughput: 14 FPS vs 30 FPS" />
@@ -86,7 +86,7 @@ Offloading Bi-LSTM inference (~50–80 ms) to a GIL-isolated process keeps the V
 
 The dataset merges studio-recorded **INCLUDE-50** subsets with custom real-world webcam captures across 11 classes (`hello`, `thank you`, `good morning`, `good`, `happy`, `time`, `father`, `teacher`, `i`, `you (plural)`, and 101 `idle` clips).
 
-Because real-world laptop captures introduce varied lighting, camera tilt, and background noise compared to clean studio data—and total data is constrained to 532 clips (34–55 per sign except idle - 101)—the model fits the training set tightly (~96%) while unseen generalization sits in the 73–85% range. All metrics below are directly reproducible from the repository scripts and training notebook (`notebooks/train_isl_bilstm.ipynb`):
+With only 532 clips (34–55 per sign, plus 101 idle) mixing studio-recorded and webcam-recorded footage, the model fits the training set tightly (~96%) while accuracy on unseen clips lands at 73–85%. Studio-vs-webcam variation (lighting, camera tilt, background) is the domain shift this project set out to handle, and a plausible contributor to the remaining gap; measuring it per source is on the roadmap. All metrics below are directly reproducible from the repository scripts and training notebook (`notebooks/train_isl_bilstm.ipynb`):
 
 | Evaluation Protocol                   |      Accuracy      |     Macro-F1      | Scope & Interpretation                                                                                               |
 | :------------------------------------ | :----------------: | :---------------: | :------------------------------------------------------------------------------------------------------------------- |
@@ -94,7 +94,7 @@ Because real-world laptop captures introduce varied lighting, camera tilt, and b
 | **Shipped `.tflite` Held-Out Split**  | **85.19%** (46/54) |     **0.859**     | Reproducible 10% stratified split (`random_state=42`) via `scripts/evaluate_tflite.py` (95% CI ≈ 73–92%).            |
 | Training Set Convergence (Epoch 150)  |       96.02%       |         —         | Final training `sparse_categorical_accuracy` (peak 97.81%); reflects training fit rather than unseen generalization. |
 
-_Note: 5-fold CV across 80, 100, and 150 epochs produced 72.4%, 71.8%, and 72.7% respectively—confirming accuracy is bounded by dataset size and lighting/noise/environment diversity rather than epoch count. This repository documents the full codebase plus post-paper Phase 3 extensions (temporal engine and Hybrid LLM) under strict reproducible cross-validation._
+_Note: 5-fold CV across 80, 100, and 150 epochs produced 72.4%, 71.8%, and 72.7% respectively—indicating accuracy is bounded by the data (size and diversity) rather than training length. This repository documents the full codebase plus post-paper Phase 3 extensions (temporal engine and Hybrid LLM). Figures here come from the scripts in this repository and are the ones to cite for this code release._
 
 <p align="center">
   <img src="docs/assets/confusion_matrix.png" width="580" alt="Held-out confusion matrix of shipped ISL_Model.tflite (85.2%, n=54)" />
@@ -118,6 +118,8 @@ _Held-out confusion matrix of the shipped `models/ISL_Model.tflite` (single 10% 
 | hello        |   0.661   | 0.673  |   0.667   |   55    |
 | you (plural) |   0.649   | 0.615  |   0.632   |   39    |
 | good         |   0.622   | 0.523  | **0.568** |   44    |
+
+_`idle` recall is ~66%: about one idle clip in three is labelled as a sign at clip level; the live temporal gate is designed to absorb this._
 
 <p align="center">
   <img src="https://q4rcgfyyqou1ialf.public.blob.vercel-storage.com/dataset.jpg" width="600" alt="ISL Dataset Class Distribution (532 Clips)" />
@@ -168,6 +170,7 @@ _ISO 9241-9 Fitts' Law pilot (n = 1, CMU HCII instrument):_ **418.7 ms** movemen
 ## Limitations & Future Research Roadmap
 
 - **Dataset Scale & Environmental Robustness:** The current model covers 11 classes across 532 clips with clip-level splits. Next: collect multi-signer, multi-lighting datasets for signer-disjoint evaluation, apply temporal/lighting augmentation, and scale vocabulary via **few-shot learning** (adding new signs from 3–5 user examples without full retraining).
+- **Measuring Domain Shift:** Tag each clip by source (studio INCLUDE-50 vs. webcam) and report per-source accuracy to quantify the studio-to-webcam gap directly.
 - **Frame Synchronization & Continuous Signing:** Consumers currently free-run on shared memory, and multi-word signing relies on isolated-sign buffering via the temporal state machine. Next: add frame-index synchronization and explore CTC / sequence-level architectures for unconstrained continuous ISL.
 - **Cross-Platform & Edge Deployment:** OS bindings (`osascript` / ⌘ hotkeys) and Apple MLX currently target macOS Apple Silicon (ARM64). Next: containerize with Docker, add Linux/Windows bindings (`xdotool` / `pywin32`), and deploy quantized headless builds on low-cost edge hardware (e.g., Raspberry Pi 5).
 - **Multi-User Usability Trials:** Expand the single-participant (n = 1) Fitts' Law pilot to multi-user trials with motor- and speech-impaired participants.
@@ -201,51 +204,30 @@ _Note: Raw INCLUDE-50 videos and `data/processed/X.npy` are excluded from git du
 
 ---
 
-## Citation, datasets & license
+## Citations, Datasets & License
 
-- **Paper:** S. Chaudhary, A. Goyal, C. Venkatesh, _"Webcam-Based Dual-Mode Hand Gesture Interface for Computer Control and Indian Sign Language,"_ Third International Conference on Advanced Computing and Systems (AdComSys 2026), UEM Kolkata, June 26–27, 2026 (Paper ID 307).
-- **Dataset:** A. Sridhar, R. G. Ganesan, P. Kumar, M. Khapra, _"INCLUDE: A Large Scale Dataset for Indian Sign Language Recognition,"_ ACM Multimedia (MM '20), 2020.
+- **Paper:** S. Chaudhary, A. Goyal, and C. Venkatesh, _"Webcam-Based Dual-Mode Hand Gesture Interface for Computer Control and Indian Sign Language,"_ Third International Conference on Advanced Computing and Systems (**AdComSys 2026**), UEM Kolkata, June 26–27, 2026 (Paper ID 307); to appear in Springer proceedings.
+- **Dataset:** A. Sridhar, R. G. Ganesan, P. Kumar, and M. Khapra, _"INCLUDE: A Large Scale Dataset for Indian Sign Language Recognition,"_ ACM Multimedia (MM '20), 2020.
 - **License:** [MIT](LICENSE).
 
----
-
----
-
----
-
-## For AI assistants & indexers (machine-readable summary)
+<details>
+<summary>Machine-readable project metadata (YAML)</summary>
 
 ```yaml
-project: dual-mode-gesture-isl # formerly Jarvis-EcoSign
+project: dual-mode-gesture-isl
 purpose: CPU-only webcam virtual mouse + isolated Indian Sign Language recognition with LLM sentence generation
 platform: macOS Apple Silicon (ARM64), Python 3.10
 entry_point: src/Jarvis.py
 isl_model:
   type: Bi-LSTM, TFLite float32, ~159K params
   input: [1, 30, 201]
-  classes: 11 # 10 signs + idle
+  classes: 11
   dataset_clips: 532
 metrics:
-  cv_5fold_accuracy:
-    { mean: 0.7274, std: 0.0406, macro_f1: 0.726, generalization: true }
-  shipped_model_single_split:
-    {
-      accuracy: 0.8519,
-      correct: 46,
-      total: 54,
-      generalization: true,
-      note: small test set,
-    }
-  keras_val_sparse_categorical_accuracy_final:
-    { value: 0.8519, generalization: partial, note: same 54-clip split }
-  keras_sparse_categorical_accuracy_final:
-    { value: 0.9602, generalization: false, note: training-set fit }
-citation_guidance:
-  - Cite 72.7% +/- 4.1% (5-fold CV) as the model's accuracy; 85.2% only as a single-split figure.
-  - Do not present training-set sparse_categorical_accuracy, or a best-epoch value, as accuracy.
-  - Throughput 14->30 FPS and the n=1 Fitts' law result are author-measured.
-reproduce:
-  [scripts/evaluate_tflite.py, scripts/cross_validate.py, "python -m pytest"]
+  cv_5fold_accuracy: { mean: 0.7274, std: 0.0406, macro_f1: 0.726, generalization: true }
+  shipped_model_single_split: { accuracy: 0.8519, correct: 46, total: 54, generalization: true }
+  keras_sparse_categorical_accuracy_final: { value: 0.9602, generalization: false }
+reproduce: [scripts/evaluate_tflite.py, scripts/cross_validate.py, "python -m pytest"]
 ```
 
----
+</details>
