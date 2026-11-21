@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://www.youtube.com/watch?v=6OAXb4nhgCM">
-    <img src="https://img.youtube.com/vi/6OAXb4nhgCM/maxresdefault.jpg" width="680" alt="Dual-Mode Gesture AI: 30 FPS Virtual Mouse & ISL Translator Demo" />
+    <img src="https://img.youtube.com/vi/6OAXb4nhgCM/maxresdefault.jpg" width="480" alt="Dual-Mode Gesture AI: 30 FPS Virtual Mouse & ISL Translator Demo" />
   </a>
 </p>
 
