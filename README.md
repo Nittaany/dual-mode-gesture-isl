@@ -1,197 +1,229 @@
 # Dual-Mode Hand Gesture Interface for Computer Control & Indian Sign Language (ISL)
 
-> **TL;DR:** An open-source, CPU-only assistive computer vision system that runs a touchless virtual mouse (HCI) and isolated Indian Sign Language (ISL) gesture recognition with temporal sentence buffering from a single 640×480 webcam. Built for consumer Apple Silicon (ARM64) hardware with zero-copy multiprocessing (**30 FPS**, up from 14 FPS single-threaded), evaluated with 5-fold stratified cross-validation (**72.7% ± 4.1% accuracy, 0.73 macro-F1** across 532 clips / 11 classes), and backed by **52 hardware-free `pytest` unit tests**.
+[![tests](https://github.com/Nittaany/dual-mode-gesture-isl/actions/workflows/tests.yml/badge.svg)](https://github.com/Nittaany/dual-mode-gesture-isl/actions/workflows/tests.yml)
+![python](https://img.shields.io/badge/python-3.10-blue)
+[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-| Specification                | Verified Value                                                                                                       |
-| :--------------------------- | :------------------------------------------------------------------------------------------------------------------- |
-| **Author**                   | Satyam Chaudhary ([ORCID: 0009-0004-0677-1495](https://orcid.org/0009-0004-0677-1495))                               |
-| **Publication**              | Presented at **AdcomSys 2026 (Springer)** — UEM Kolkata (Paper ID 307, First Author)                                 |
-| **Core Stack**               | Python 3.10, MediaPipe Holistic, TensorFlow Lite (Bi-LSTM, ~159K params), OpenCV, PyAutoGUI, Eel                     |
-| **Post-Paper Extension**     | Temporal Intelligence Engine + Hybrid LLM (**Apple MLX** `Qwen1.5-1.8B-Chat-4bit` + **Groq** `llama-3.1-8b-instant`) |
-| **Throughput**               | **30 FPS** locked via zero-copy shared memory (author-measured; up from 14 FPS GIL-blocked baseline)                 |
-| **ISL Accuracy (5-Fold CV)** | **72.74% ± 4.06%** accuracy, **0.726 ± 0.041** macro-F1 (532 clips, 11 classes, 150 epochs)                          |
-| **Shipped `.tflite` Split**  | **85.19%** (46/54 clips), **0.859** macro-F1 on a single stratified 10% split (95% CI ≈ 73–92%)                      |
-| **Unit Tests**               | **52 passing** (`pytest -v` — normalization invariances, One Euro Filter, intent routing, train/serve parity)        |
-| **Target Hardware**          | macOS Apple Silicon (ARM64), standard consumer webcam, no GPU or depth sensor                                        |
+> **TL;DR** — A CPU-only, single-webcam assistive system with two modes: a touchless **virtual mouse** (HCI) and **isolated Indian Sign Language recognition** with temporal sentence buffering and LLM sentence generation. Runs on Apple Silicon at **30 FPS** using zero-copy shared-memory multiprocessing. The ISL classifier (Bi-LSTM, ~159K parameters, TFLite) scores **72.7% ± 4.1% accuracy (0.73 macro-F1) under 5-fold stratified cross-validation** on 532 clips / 11 classes. Formerly codenamed *Jarvis-EcoSign*.
 
----
+<!-- DEMO: add a 60–90 s video link here (mouse mode → ISL mode → translated sentence) -->
 
-## What Problem Does This Solve?
+## At a glance
 
-Existing assistive gesture systems face two structural bottlenecks:
-
-1. **Functional Split:** Tools provide either deterministic OS navigation (virtual mouse) or sign language recognition—rarely both on a standard laptop.
-2. **The Python GIL Bottleneck:** Running MediaPipe landmark extraction and Bi-LSTM deep learning inference in a single Python loop causes thread contention, dropping throughput to **14 FPS** and stuttering the cursor.
+| | |
+| :-- | :-- |
+| **Author** | Satyam Chaudhary ([ORCID 0009-0004-0677-1495](https://orcid.org/0009-0004-0677-1495)) |
+| **Publication** | Presented at AdComSys 2026 (UEM Kolkata, 26–27 June 2026); to appear in Springer proceedings |
+| **Stack** | Python 3.10 · MediaPipe (Hands + Holistic) · TensorFlow Lite · OpenCV · PyAutoGUI · Eel (web GUI) |
+| **LLM layer** | Rule parser → local Apple MLX `Qwen1.5-1.8B-Chat-4bit` → Groq `llama-3.1-8b-instant` fallback |
+| **Throughput** | 30 FPS vs. 14 FPS single-threaded baseline *(author-measured)* |
+| **Hardware** | macOS Apple Silicon, standard webcam, no GPU / depth sensor |
+| **Quality gates** | 52 hardware-free `pytest` tests · reproducible evaluation scripts · gitleaks clean (42 commits) |
 
 ---
 
-## System Architecture (AdcomSys 2026 Core + Phase 3 Extension)
+## Results — how to read the accuracy numbers
+
+Four different numbers describe this model. Only the first two measure generalization to unseen clips.
+
+| # | Metric | Value | What it measures |
+| :-: | :-- | :-: | :-- |
+| 1 | **5-fold stratified CV accuracy** *(headline)* | **72.74% ± 4.06%** | Every clip tested exactly once, never used for training or epoch selection. Folds: 70.1, 76.6, 74.5, 67.0, 75.5. Macro-F1 **0.726 ± 0.041**. `scripts/cross_validate.py` |
+| 2 | **Shipped model, single 10% held-out split** | **85.19%** (46/54) | One stratified split (`random_state=42`), macro-F1 0.859. Small test set → 95% interval ≈ 73–92%; it landed above all five CV folds, so treat it as a favourable draw. `scripts/evaluate_tflite.py` |
+| 3 | Keras `val_sparse_categorical_accuracy` (same 54 clips) | 85.19% final epoch; swings ≈ 74–93% epoch to epoch | Per-epoch score on that split. Peak 92.6% (epoch 86) is **not** a saved checkpoint — the shipped weights are epoch 150. |
+| 4 | Keras `sparse_categorical_accuracy` (training set, dropout active) | 96.0% final epoch; peak 97.8% (epoch 138) | How well the model **fits its training data**. Not a generalization estimate. The ~11-point gap to #3 indicates overfitting. |
+
+Training length is not the bottleneck: 5-fold CV at 80 / 100 / 150 epochs gave 72.4% / 71.8% / 72.7%. Accuracy is bounded by dataset size and diversity (532 clips, one webcam, few signers).
+
+**Per-class results (pooled 5-fold CV, 150 epochs)**
+
+| Class | Precision | Recall | F1 | Clips |
+| :-- | :-: | :-: | :-: | :-: |
+| father | 0.930 | 0.870 | **0.899** | 46 |
+| happy | 0.851 | 0.909 | **0.879** | 44 |
+| thank you | 0.741 | 0.851 | 0.792 | 47 |
+| teacher | 0.757 | 0.824 | 0.789 | 34 |
+| time | 0.737 | 0.718 | 0.727 | 39 |
+| i | 0.765 | 0.667 | 0.712 | 39 |
+| good morning | 0.630 | 0.773 | 0.694 | 44 |
+| idle | 0.705 | 0.663 | 0.684 | 101 |
+| hello | 0.661 | 0.673 | 0.667 | 55 |
+| you (plural) | 0.649 | 0.615 | 0.632 | 39 |
+| good | 0.622 | 0.523 | **0.568** | 44 |
+
+`idle` recall of ~66% means roughly one in three idle clips is classified as a sign at the clip level; the live temporal gate (below) is designed to absorb this, but its effect has not been measured separately.
 
 <p align="center">
-  <img src="https://q4rcgfyyqou1ialf.public.blob.vercel-storage.com/architecture.jpeg" width="680" alt="Zero-Copy Multiprocessing System Architecture" />
+  <img src="docs/assets/confusion_matrix.png" width="600" alt="Held-out confusion matrix of the shipped ISL_Model.tflite (85.2%, n=54)" />
 </p>
 
-To stay within the **33.3 ms/frame** budget for 30 FPS, the system decouples webcam capture from AI inference across three OS processes:
+*Held-out confusion matrix of the shipped `models/ISL_Model.tflite` (single split, 46/54 correct; cells show row-recall and raw counts).*
 
-- **Zero-Copy Shared Memory (GIL Bypass):** Standard `multiprocessing.Queue` pipes pickle and serialize each 640×480×3 frame (~27.6 MB/s at 30 FPS). Instead, `src/vision_backend.py` writes raw NumPy arrays directly into `multiprocessing.shared_memory` (`jarvis_shm`) via `numpy.copyto()`, giving the HCI and ISL consumer processes $O(1)$ zero-copy reads.
-- **Single-Pass Holistic Extraction:** MediaPipe Holistic extracts 21-point dominant-hand landmarks (Mode 1 HCI) and a 201-point upper-body + dual-hand spatial vector (Mode 2 ISL) in one pass.
-- **Post-Paper Extension (Phase 3):** Extends the published dual-mode core with a temporal state machine and a 3-tier translation pipeline (deterministic rule parser → local 4-bit Apple MLX → Groq LPU cloud fallback).
-
-| Module                              | Responsibility                                                                                          |
-| :---------------------------------- | :------------------------------------------------------------------------------------------------------ |
-| `src/Jarvis.py`                     | Main orchestrator, process lifecycle, Eel Web GUI bridge, voice/text fallback                           |
-| `src/vision_backend.py`             | 30 FPS webcam producer, zero-copy shared memory writer, wake/mode-switch heuristics                     |
-| `src/controllers/HCI_Controller.py` | 21-point hand heuristics, One Euro Filter, relative-motion cursor & OS actions                          |
-| `src/controllers/ISL_Controller.py` | 201-point Holistic extraction, Shoulder-Invariant Normalization, TFLite Bi-LSTM, temporal state machine |
-| `src/controllers/llm_engine.py`     | Non-blocking Hybrid LLM worker (Apple MLX 4-bit local + Groq API failsafe, 5.0s timeout)                |
-| `tests/test_core.py`                | 52 hardware-free unit tests (normalization, filters, `parse_intent`, train/serve skew guard)            |
+### Relationship to the published paper
+This repository extends the system presented at AdComSys 2026 and re-evaluates it with a stricter, fully reproducible protocol. The numbers in this README come from the scripts in this repo and **supersede any higher figure quoted elsewhere for this code release**. The training notebook with its complete logs is included (`notebooks/train_isl_bilstm.ipynb`).
 
 ---
 
-## Verified Benchmarks & Evaluation
-
-All ML metrics below are reproducible via `scripts/evaluate_tflite.py` and `scripts/cross_validate.py`.
-
-### 1. Throughput: GIL-Blocked vs. Zero-Copy Multiprocessing
+## System architecture
 
 <p align="center">
-  <img src="https://q4rcgfyyqou1ialf.public.blob.vercel-storage.com/fps_benchmark.jpg" width="460" alt="Vision Pipeline Throughput: 14 FPS vs 30 FPS" />
+  <img src="https://q4rcgfyyqou1ialf.public.blob.vercel-storage.com/architecture.jpeg" width="680" alt="Zero-copy multiprocessing architecture" />
 </p>
 
-### 2. ISL Recognition Evaluation (532 Curated Clips, 11 Classes)
-
-Evaluated on **532 curated video sequences** (merged from INCLUDE-50 subsets and custom webcam captures) across 11 classes (`Hello`, `Thank You`, `Good Morning`, `Good`, `Happy`, `Time`, `Father`, `Teacher`, `I`, `You (plural)`, and 101 `Idle` negative-control clips):
-
-| Evaluation Protocol                           |      Accuracy      |     Macro-F1      | Notes                                                                                                |
-| :-------------------------------------------- | :----------------: | :---------------: | :--------------------------------------------------------------------------------------------------- |
-| **5-Fold Stratified CV (Headline)**           | **72.74% ± 4.06%** | **0.726 ± 0.041** | Every clip tested once; folds: 70.1%, 76.6%, 74.5%, 67.0%, 75.5% (`scripts/cross_validate.py`)       |
-| Shipped `ISL_Model.tflite` (Single 10% Split) |   85.19% (46/54)   |       0.859       | Reproducible held-out split (`scripts/evaluate_tflite.py`); 95% CI ≈ 73–92% (favourable draw vs. CV) |
-
-_Note: 5-fold CV across 80, 100, and 150 epochs scored 72.4%, 71.8%, and 72.7% respectively—confirming performance is bounded by dataset size/diversity rather than training length._
-
-<p align="center">
-  <img src="docs/assets/confusion_matrix.png" width="580" alt="Shipped ISL_Model.tflite Held-Out Confusion Matrix (85.2%, n=54)" />
-</p>
-
-_Figure: Held-out confusion matrix of the shipped `models/ISL_Model.tflite` on the single 10% split (46/54 correct, showing row recall and raw clip counts)._
-
-### 3. Temporal State Machine & Hybrid LLM Extension (Phase 3)
-
-Raw sliding-window LSTM outputs flicker during hand transitions. The temporal engine applies a **0.80 / 0.70 hysteresis confidence gate**, leaky 5-frame `deque` majority vote (`popleft`), **0.5s word-hold confirmation**, **2.0s cooldown**, **0.8s post-word stability**, **3.0s–6.0s context-aware timeouts**, and a **10-frame Idle commit**. Short canonical phrases resolve deterministically via `parse_intent()`; multi-word gloss arrays route to the non-blocking Hybrid LLM worker.
-
-<p align="center">
-  <img src="https://q4rcgfyyqou1ialf.public.blob.vercel-storage.com/temporal_engine.png" width="45%" alt="Temporal State Machine Output" />
-  &nbsp;&nbsp;&nbsp;
-  <img src="https://q4rcgfyyqou1ialf.public.blob.vercel-storage.com/mlx_llm_test.png.png" width="45%" alt="Apple MLX and Groq LLM Bridge Test" />
-</p>
-
----
-
-## Technical Deep Dive (Expandable)
-
-<details>
-<summary><strong>1. Mathematical Foundations (Shoulder-Invariant Normalization & One Euro Filter)</strong></summary>
-
-- **Shoulder-Invariant Normalization (`src/utils/normalization.py`):** Centers all 201 landmark coordinates on the thoracic midpoint (`c = (S_L + S_R) / 2`) and scales by inter-acromion distance (`D = ||S_L - S_R||_2`, falling back to `1.0` if `D < 0.01`), followed by `nan_to_num` and `clip(-5.0, 5.0)` at both training and inference. Proven invariant to uniform scaling and translation by `tests/test_core.py`:
-
-```math
-\hat{x}_i = \frac{x_i - c}{D}, \quad D = \|S_L - S_R\|_2
+```
+Webcam ─► vision_backend.py (producer: capture, mirror, wake/mode gestures, LLM worker thread)
+              │  numpy.copyto → SharedMemory "jarvis_shm" (640×480×3 uint8 = 921,600 B/frame)
+              ├─► HCI process  (MediaPipe Hands, 21 landmarks)     active when mode = 0
+              └─► ISL process  (MediaPipe Holistic, 201 features)  active when mode = 1
+                       └─► gloss sequence ─► rule parser / LLM ─► data/isl_live.txt ─► Jarvis.py ─► Eel GUI + speech
 ```
 
-- **One Euro Filter (`src/utils/math_utils.py`):** Speed-adaptive first-order low-pass filter (`min_cutoff = 0.01`, `beta = 1.0`, `d_cutoff = 1.0`) that suppresses slow hand tremors while lowering lag during fast sweeps:
+- **Zero-copy IPC:** `multiprocessing.Queue` would pickle ~27.6 MB/s of frames at 30 FPS; shared memory gives consumers O(1) reads and keeps MediaPipe + TFLite inference out of the capture loop's GIL.
+- **Mode switching:** hold **Thumbs-Up (2.0 s)** to wake, **Open Palm (3.5 s)** to toggle HCI ↔ ISL.
+
+| File | Responsibility |
+| :-- | :-- |
+| `src/Jarvis.py` | Orchestrator: process lifecycle, voice/text input, bridge-file watcher |
+| `src/app.py` | Eel web GUI, LLM backend toggle (`data/llm_mode.txt`) |
+| `src/vision_backend.py` | Webcam producer, shared-memory writer, wake/mode gestures, LLM worker thread |
+| `src/controllers/HCI_Controller.py` | Gesture recognizer, One Euro Filter, relative-motion cursor, OS actions |
+| `src/controllers/ISL_Controller.py` | Holistic extraction, normalization, TFLite inference, temporal state machine, `parse_intent()` |
+| `src/controllers/llm_engine.py` | `HybridLLM`: MLX local + Groq cloud, timeout, retry, cache |
+| `src/utils/normalization.py`, `math_utils.py` | Shoulder-invariant normalization; One Euro Filter and sigmoid-gain utilities |
+| `src/ml_tools/` | Dataset extraction, INCLUDE-50 migration, custom-clip recorder, official split lists |
+| `scripts/` | `evaluate_tflite.py`, `cross_validate.py`, `plot_confusion_matrix.py` |
+| `notebooks/train_isl_bilstm.ipynb` | Training and TFLite export (Colab) with full logs |
+| `tests/test_core.py` | 52 unit tests |
+
+---
+
+## ISL recognition pipeline
+
+**Data.** 532 clips, 11 classes: 10 signs (`hello, thank you, good morning, good, happy, time, father, teacher, i, you (plural)`) + `idle` (101 negative-control clips). Sources: INCLUDE-50 subsets and custom webcam recordings. Each clip → MediaPipe Holistic → 201 features/frame → linear resampling to 30 frames → tensor `(30, 201)`.
+
+**Shoulder-invariant normalization** (`src/utils/normalization.py`). Pose landmarks 0–24 (75 values) + left hand (63) + right hand (63). With shoulders `S_L, S_R`:
 
 ```math
-\alpha(f_c, \Delta t) = \frac{2\pi f_c \Delta t}{2\pi f_c \Delta t + 1}, \quad f_c = f_{\min} + \beta |\hat{\dot{x}}|, \quad \hat{x}_i = \alpha x_i + (1 - \alpha)\hat{x}_{i-1}
+c = \tfrac{1}{2}(S_L + S_R), \qquad D = \lVert S_L - S_R \rVert_2 \;(D := 1 \text{ if } D < 0.01), \qquad \hat{x}_i = \frac{x_i - c}{D}
 ```
 
-</details>
+Followed by `nan_to_num` and `clip(-5, 5)` in both the training notebook and the live loop. Unit tests prove invariance to uniform scaling and translation, safe zero-shoulder-distance handling, and parity between the training and inference copies of the function.
+
+**Model** (~159K parameters): `Bidirectional(LSTM 64, return_sequences) → BatchNorm → Dropout 0.3 → LSTM 32 → BatchNorm → Dropout 0.3 → Dense 32 (ReLU) → Dense 11 (softmax)`. Adam (lr 5e-4, clipnorm 1.0), sparse categorical cross-entropy, 150 epochs, batch 8, `unroll=True`, exported as float32 TFLite (builtin ops). Early stopping was configured on training loss and never triggered, so the shipped weights are the final epoch's.
 
 <details>
-<summary><strong>2. Bi-LSTM Architecture, Training Recipe & Dataset Distribution</strong></summary>
-
-- **Input Tensor:** `(1, 30, 201)` — 30 linearly interpolated frames × (75 upper-body pose + 63 left-hand + 63 right-hand 3D coordinates).
-- **Network (~159K parameters):** `Bidirectional(LSTM(64, return_sequences=True, unroll=True))` → `BatchNorm` → `Dropout(0.3)` → `LSTM(32, unroll=True)` → `BatchNorm` → `Dropout(0.3)` → `Dense(32, ReLU)` → `Dense(11, Softmax)`.
-- **Training & Export (`notebooks/train_isl_bilstm.ipynb`):** Adam (`lr=0.0005`, `clipnorm=1.0`), Sparse Categorical Cross-Entropy, 150 epochs, batch size 8. Exported to **TensorFlow Lite (Float32, builtin ops)** with `unroll=True` for Apple Silicon stability.
+<summary><strong>Training curves & dataset distribution</strong></summary>
 
 <p align="center">
-  <img src="https://q4rcgfyyqou1ialf.public.blob.vercel-storage.com/dataset.jpg" width="600" alt="ISL Dataset Class Distribution (532 Sequences)" />
+  <img src="https://q4rcgfyyqou1ialf.public.blob.vercel-storage.com/dataset.jpg" width="600" alt="Class distribution (532 clips)" />
 </p>
+<p align="center">
+  <img src="https://q4rcgfyyqou1ialf.public.blob.vercel-storage.com/accuracy.png" width="46%" alt="sparse_categorical_accuracy and val_sparse_categorical_accuracy per epoch" />
+  &nbsp;&nbsp;
+  <img src="https://q4rcgfyyqou1ialf.public.blob.vercel-storage.com/Loss.png" width="46%" alt="loss and val_loss per epoch" />
+</p>
+
+The curves plot Keras `sparse_categorical_accuracy` (training) against `val_sparse_categorical_accuracy` (the 54-clip split). Validation loss bottoms out around epoch 120 and then drifts upward while training loss keeps falling — the overfitting visible in metrics #3 vs #4 above.
+</details>
+
+### Temporal engine (isolated signs → sentences)
+Raw sliding-window predictions flicker, so the live loop applies: a **0.80 / 0.70 hysteresis confidence gate** (fresh start / mid-sentence), a leaky 5-frame majority-vote buffer, **0.5 s word-hold confirmation**, **2.0 s cooldown**, **0.8 s post-word stability**, **3.0–6.0 s context-aware timeouts**, and a **10-frame Idle commit**. Short canonical phrases resolve deterministically in `parse_intent()`; longer gloss sequences go to the LLM worker.
+
+### Hybrid LLM (`llm_engine.py`)
+Rule parser (0 ms) → Apple MLX `Qwen1.5-1.8B-Chat-4bit` (~1.2 GB, downloaded on first launch) → Groq `llama-3.1-8b-instant`; mode switchable live (`MLX | GROQ | AUTO`). Guardrails: background worker, **5 s `ThreadPoolExecutor` timeout**, 2-attempt Groq retry, tuple-keyed cache, raw-gloss fallback.
 
 <p align="center">
-  <img src="https://q4rcgfyyqou1ialf.public.blob.vercel-storage.com/accuracy.png" width="46%" alt="Model Accuracy Convergence" />
-  &nbsp;&nbsp;&nbsp;
-  <img src="https://q4rcgfyyqou1ialf.public.blob.vercel-storage.com/Loss.png" width="46%" alt="Model Loss Convergence" />
+  <img src="https://q4rcgfyyqou1ialf.public.blob.vercel-storage.com/temporal_engine.png" width="45%" alt="Temporal state machine output" />
+  &nbsp;&nbsp;
+  <img src="https://q4rcgfyyqou1ialf.public.blob.vercel-storage.com/mlx_llm_test.png.png" width="45%" alt="MLX and Groq bridge test" />
 </p>
-
-</details>
-
-<details>
-<summary><strong>3. HCI Gesture Controls & ISO 9241-9 Fitts' Law Pilot (n = 1)</strong></summary>
-
-| OS Command             | Gesture              | Geometric State Logic                                                          |
-| :--------------------- | :------------------- | :----------------------------------------------------------------------------- |
-| **Cursor Move**        | Index up             | Relative knuckle (`lm 5`) delta × `1.3` (trackpad-style, prevents Gorilla Arm) |
-| **Left / Right Click** | Index / Middle pinch | Euclidean distance `< 0.04` with `> 0.06` mutual-exclusion margin              |
-| **Drag & Drop**        | Closed fist          | All four fingers curled (`mouseDown`, release on open)                         |
-| **App Switch**         | Three fingers        | Index, middle, ring up; pinky down (`⌘-Tab`, 1.0s cooldown)                    |
-| **Screenshot**         | Pinky up             | Pinky extended only (`⌘⇧3`, 1.0s cooldown)                                     |
-| **Neutral / Clutch**   | Open hand            | Pauses cursor to reposition hand                                               |
-
-**Single-User Fitts' Law Pilot (n = 1, CMU HCII Instrument):**
-
-- Standard GUI targets (`W = 1.00 cm, D = 4.0 cm`): **418.7 ms movement time, 0% error**.
-- Sub-pixel targets (`W = 0.25 cm, D = 4.0–8.0 cm`): 60–90% error (640×480 webcam resolution floor).
-
-</details>
-
-<details>
-<summary><strong>4. Hybrid LLM Fault Tolerance (`src/controllers/llm_engine.py`)</strong></summary>
-
-- **3-Tier Routing:** `parse_intent()` (0 ms deterministic templates) → local **Apple MLX** (`mlx-community/Qwen1.5-1.8B-Chat-4bit`, ~1.2 GB RAM) → **Groq** (`llama-3.1-8b-instant`) fallback, live-switchable via `data/llm_mode.txt`.
-- **Guardrails:** Non-blocking background worker thread, strict **5.0s `ThreadPoolExecutor` timeout**, 2-attempt Groq retry (0.5s backoff), tuple-keyed result cache, and capitalised raw-gloss fallback.
-
-</details>
 
 ---
 
-## Known Limitations & Honest Engineering Audit
+## Virtual mouse (HCI mode)
 
-Full source-level audit documented in [`PROJECT_DEEP_DIVE.md`](PROJECT_DEEP_DIVE.md):
+| Action | Gesture | Rule (MediaPipe Hands, 21 landmarks) |
+| :-- | :-- | :-- |
+| Move | Index up | Relative knuckle (lm 5) delta × 1.3, One Euro Filter (`min_cutoff 0.01, β 1.0`) |
+| Left / right click | Index / middle pinch | Thumb distance < 0.04 with > 0.06 margin to the other finger; 0.3 s cooldown |
+| Drag | Closed fist | All four fingers curled → `mouseDown`; release on any other gesture |
+| App switch | Index + middle + ring up | ⌘-Tab, 1.0 s cooldown |
+| Screenshot | Pinky only | ⌘⇧3, 1.0 s cooldown |
+| Clutch | Open hand | Cursor stops so the hand can be repositioned |
 
-- **Per-Class CV Weak Spots:** Pooled 5-fold CV F1 is lowest on `good` (0.57), `you (plural)` (0.63), `hello` (0.67), and `idle` (0.68; ~66% recall, meaning ~1 in 3 idle clips classifies as a sign before temporal gating). Strongest classes: `father` (0.90) and `happy` (0.88).
-- **Evaluation Scope:** Clip-level stratified split (not signer-disjoint) on 532 clips from 11 classes; Fitts' Law pilot is n = 1.
-- **Live Pipeline Caveats:** `vision_backend.py` sets `frame_ready` without clearing per frame (allowing consumers to free-run on shared memory) and applies `cv2.flip(frame, 1)` live while training clips were unflipped.
-- **Platform Scope:** OS bindings (`osascript`/⌘ hotkeys) and Apple MLX target macOS ARM64; Linux/Windows ports require swapping to `xdotool`/`pywin32` and the Groq/CPU backend.
+*Fitts' law pilot (ISO 9241-9 style, **n = 1**):* W = 1.0 cm, D = 4.0 cm → 418.7 ms movement time, 0% errors; W = 0.25 cm → 60–90% errors (640×480 resolution floor).
 
 ---
 
-## Quick Start & Testing (macOS Apple Silicon)
+## Limitations & roadmap
+
+- **Accuracy ceiling:** ~73% cross-validated on 11 classes; weakest classes `good`, `you (plural)`, `hello`, `idle`. Next steps: more and more varied signers, augmentation (time-warp, scale jitter), class weights.
+- **Evaluation scope:** clip-level stratified splits, not signer-disjoint; custom and INCLUDE clips are mixed, so near-duplicate takes may span train and test. The Fitts' law pilot is n = 1.
+- **Training recipe:** the 54-clip split doubled as Keras validation data, and early stopping watched training loss. Planned: separate validation set, `val_loss` monitoring.
+- **Frame handshake (known issue):** the producer sets `frame_ready` every frame and never clears it, so consumers free-run on whatever frame is in shared memory; the effective ISL window length therefore depends on CPU speed. Training clips are resampled whole-clip to 30 frames, whereas live inference uses the last 30 loop iterations.
+- **Mirroring (unvalidated):** live frames are mirrored with `cv2.flip`; custom clips from `record_custom_data.py` are saved unflipped. Consistency between data sources and the live feed has not been tested.
+- **Unused utility:** `SigmoidController` (velocity-dependent cursor gain) is implemented and unit-tested but not yet wired into the cursor loop, which uses a constant gain.
+- **Platform:** ⌘ hotkeys and Apple MLX target macOS ARM64; Linux/Windows need `xdotool`/`pywin32` and the Groq backend.
+
+A line-by-line audit with all findings is in [`PROJECT_DEEP_DIVE.md`](PROJECT_DEEP_DIVE.md).
+
+---
+
+## Quick start (macOS, Apple Silicon)
 
 ```bash
-git clone [https://github.com/Nittaany/dual-mode-gesture-isl.git](https://github.com/Nittaany/dual-mode-gesture-isl.git)
+git clone https://github.com/Nittaany/dual-mode-gesture-isl.git
 cd dual-mode-gesture-isl
 python3.10 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # optional: add GROQ_API_KEY for cloud fallback
+cp .env.example .env        # optional: add GROQ_API_KEY for the cloud LLM fallback
 python3 src/Jarvis.py
 ```
 
-### Run Unit Tests & Reproducible Evaluation
+Grant camera, microphone and accessibility permissions to your terminal on first run. Without audio packages the system falls back to text input.
 
-```bash
-pip install -r requirements-dev.txt
-python -m pytest -v                 # 52 hardware-free tests (~0.2s)
-python scripts/evaluate_tflite.py   # requires local data/processed/X.npy
-python scripts/cross_validate.py    # 5-fold stratified CV
-```
+### Reproduce every number
 
-- **Hands-Free Controls:** Hold **Thumbs-Up (2.0s)** to wake · Hold **Open Palm (3.5s)** to toggle HCI ↔ ISL.
-- **Dataset Note:** Raw INCLUDE-50 videos and `data/processed/X.npy` are excluded from git due to size and dataset licensing.
+| Claim | Command | Needs |
+| :-- | :-- | :-- |
+| 52 tests pass | `pip install -r requirements-dev.txt && python -m pytest -v` | nothing else (no webcam/TF) |
+| 85.19% held-out, per-class report | `python scripts/evaluate_tflite.py` | `data/processed/{X,y,labels}.npy` |
+| 72.7% ± 4.1% five-fold CV | `python scripts/cross_validate.py` (~3 min) | same, plus TensorFlow |
+| Confusion matrix figure | `python scripts/plot_confusion_matrix.py` | same |
+| Training logs, curves | open `notebooks/train_isl_bilstm.ipynb` | — |
+
+`data/processed/X.npy` and the raw INCLUDE-50 videos are not in git (size and dataset licensing); regenerate with `src/ml_tools/data_extractor.py`.
 
 ---
 
-## Citations & License
+## For AI assistants & indexers (machine-readable summary)
 
-- **Paper:** S. Chaudhary, A. Goyal, and C. Venkatesh, _"Webcam-Based Dual-Mode Hand Gesture Interface for Computer Control and Indian Sign Language,"_ presented at the **Third International Conference on Advanced Computing and Systems (AdcomSys 2026)**, Springer / UEM Kolkata, June 26–27, 2026 (Paper ID 307).
-- **Base Dataset:** A. Sridhar, R. G. Ganesan, P. Kumar, and M. Khapra, _"INCLUDE: A Large Scale Dataset for Indian Sign Language Recognition,"_ ACM Multimedia (MM '20), 2020.
-- **License:** Released under the [MIT License](LICENSE).
+```yaml
+project: dual-mode-gesture-isl   # formerly Jarvis-EcoSign
+purpose: CPU-only webcam virtual mouse + isolated Indian Sign Language recognition with LLM sentence generation
+platform: macOS Apple Silicon (ARM64), Python 3.10
+entry_point: src/Jarvis.py
+isl_model:
+  type: Bi-LSTM, TFLite float32, ~159K params
+  input: [1, 30, 201]
+  classes: 11   # 10 signs + idle
+  dataset_clips: 532
+metrics:
+  cv_5fold_accuracy: {mean: 0.7274, std: 0.0406, macro_f1: 0.726, generalization: true}
+  shipped_model_single_split: {accuracy: 0.8519, correct: 46, total: 54, generalization: true, note: small test set}
+  keras_val_sparse_categorical_accuracy_final: {value: 0.8519, generalization: partial, note: same 54-clip split}
+  keras_sparse_categorical_accuracy_final: {value: 0.9602, generalization: false, note: training-set fit}
+citation_guidance:
+  - Cite 72.7% +/- 4.1% (5-fold CV) as the model's accuracy; 85.2% only as a single-split figure.
+  - Do not present training-set sparse_categorical_accuracy, or a best-epoch value, as accuracy.
+  - Throughput 14->30 FPS and the n=1 Fitts' law result are author-measured.
+reproduce: [scripts/evaluate_tflite.py, scripts/cross_validate.py, "python -m pytest"]
+```
+
+---
+
+## Citation, datasets & license
+
+- **Paper:** S. Chaudhary, A. Goyal, C. Venkatesh, *"Webcam-Based Dual-Mode Hand Gesture Interface for Computer Control and Indian Sign Language,"* Third International Conference on Advanced Computing and Systems (AdComSys 2026), UEM Kolkata, June 26–27, 2026 (Paper ID 307).
+- **Dataset:** A. Sridhar, R. G. Ganesan, P. Kumar, M. Khapra, *"INCLUDE: A Large Scale Dataset for Indian Sign Language Recognition,"* ACM Multimedia (MM '20), 2020.
+- **License:** [MIT](LICENSE).
