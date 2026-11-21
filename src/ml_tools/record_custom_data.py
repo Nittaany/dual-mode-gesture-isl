@@ -116,7 +116,7 @@ def record_batch(rel_path, target_count):
 
 def main():
     print("════════════════════════════════════════════════════")
-    print(" JARVIS-ECOSIGN: CUSTOM DATASET RECORDER")
+    print(" CUSTOM DATASET RECORDER")
     print("════════════════════════════════════════════════════")
     print(f"Root: {DATASET_ROOT}")
 

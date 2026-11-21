@@ -158,7 +158,7 @@
 ISL_Controller.py - PRODUCTION GRADE CSLR
 Robust Continuous Sign Language Recognition with Temporal Intelligence
 
-Author: Jarvis-EcoSign Team
+Author: Satyam Chaudhary
 Date: April 2026
 Architecture: Multiprocessing (Shared Memory + Queue Communication)
 ═══════════════════════════════════════════════════════════════════════════════

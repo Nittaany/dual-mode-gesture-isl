@@ -1,5 +1,5 @@
 """
-Hardware-free unit tests for Jarvis-EcoSign core logic.
+Hardware-free unit tests for the dual-mode gesture interface core logic.
 
 No webcam, no real MediaPipe/TensorFlow/OpenCV, no network or LLM calls.
 Heavy third-party modules are stubbed ONLY while ISL_Controller is imported.
