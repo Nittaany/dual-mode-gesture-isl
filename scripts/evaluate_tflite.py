@@ -15,7 +15,7 @@ import numpy as np
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DATA_DIR = os.path.join(ROOT, "data", "processed")  # where data_extractor.py writes
-MODEL_PATH = os.path.join(ROOT, "models", "ISL_Model.tflite")
+MODEL_PATH = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "models", "ISL_Model.tflite")
 
 
 def load_interpreter(path):
