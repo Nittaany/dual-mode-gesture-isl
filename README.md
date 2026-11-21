@@ -17,7 +17,11 @@
 <p align="center">
   <a href="https://www.youtube.com/watch?v=6OAXb4nhgCM"><strong>Watch full walkthrough (4:52)</strong></a> ·
   <a href="https://www.youtube.com/watch?v=6OAXb4nhgCM&t=149s"><strong>Jump straight to live Virtual Mouse & ISL demo (2:29)</strong></a>
-</p>                                                                                     |
+</p>
+
+## At a Glance
+
+| Specification            | Details                                                                                                              |
 | :----------------------- | :------------------------------------------------------------------------------------------------------------------- |
 | **Author**               | Satyam Chaudhary ([ORCID: 0009-0004-0677-1495](https://orcid.org/0009-0004-0677-1495))                               |
 | **Research Context**     | B.Tech Major Research Project (15 credits), Dept. of Computing Technologies, SRMIST                                  |
